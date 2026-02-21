@@ -1,7 +1,3 @@
-# ===============================
-# CLEAN COMPARISON: CARS-M vs BASELINE
-# ===============================
-
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -82,7 +78,7 @@ carsm_probs = carsm_model.predict_proba(X_test_scaled)[:,1]
 # ===============================
 
 NUM_SIMULATIONS = 100
-NOISE_STD = 0.015
+NOISE_STD = 0.02
 
 mc_probs = []
 
@@ -101,7 +97,7 @@ mean_probs = mc_probs.mean(axis=0)
 thresholds = np.arange(0.05, 0.9, 0.01)
 
 best_f1 = 0
-best_t = 0.5
+best_t = 0.1
 
 for t in thresholds:
     preds = (mean_probs >= t).astype(int)
@@ -117,11 +113,13 @@ recall_carsm = recall_score(y_test, carsm_preds)
 accuracy_carsm = accuracy_score(y_test, carsm_preds)
 f1_carsm = f1_score(y_test, carsm_preds)
 
+
+
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 
 NUM_SIMULATIONS = 100
-NOISE_STD = 0.01
+NOISE_STD = 0.015
 
 # ===============================
 # MONTE CARLO SIMULATION FUNCTION
@@ -167,50 +165,126 @@ f1_carsm_mc, prec_carsm_mc, rec_carsm_mc = monte_carlo_evaluation(
 # ===============================
 def ci_95(arr):
     return np.percentile(arr, 2.5), np.percentile(arr, 97.5)
+# ===============================
+# FULL MONTE CARLO METRICS
+# ===============================
+
+def monte_carlo_full_metrics(model, X_test, y_test, threshold=None):
+    f1_scores = []
+    precision_scores = []
+    recall_scores = []
+    accuracy_scores = []
+
+    for i in range(NUM_SIMULATIONS):
+        noise = np.random.normal(0, NOISE_STD, X_test.shape)
+        X_noisy = X_test + noise
+
+        probs = model.predict_proba(X_noisy)[:,1]
+
+        if threshold is None:
+            preds = (probs >= 0.5).astype(int)
+        else:
+            preds = (probs >= threshold).astype(int)
+
+        f1_scores.append(f1_score(y_test, preds))
+        precision_scores.append(precision_score(y_test, preds))
+        recall_scores.append(recall_score(y_test, preds))
+        accuracy_scores.append(accuracy_score(y_test, preds))
+
+    return (np.array(f1_scores),
+            np.array(precision_scores),
+            np.array(recall_scores),
+            np.array(accuracy_scores))
+# ===============================
+# STATISTICAL SIGNIFICANCE TEST
+# ===============================
+
+from scipy.stats import ttest_rel
+import numpy as np
+
+# Difference per Monte Carlo run
+f1_diff = f1_carsm_mc - f1_base_mc
+
+# Paired t-test
+t_stat, p_value = ttest_rel(f1_carsm_mc, f1_base_mc)
+
+# Effect size (Cohen's d for paired samples)
+mean_diff = np.mean(f1_diff)
+std_diff = np.std(f1_diff, ddof=1)
+cohens_d = mean_diff / std_diff
+
+print("\n==============================")
+print(" STATISTICAL SIGNIFICANCE TEST ")
+print("==============================")
+print(f"Mean F1 Difference (CARS-M - Baseline): {mean_diff:.6f}")
+print(f"T-statistic: {t_stat:.4f}")
+print(f"P-value: {p_value:.6f}")
+print(f"Cohen's d (effect size): {cohens_d:.4f}")
+
+if p_value < 0.05:
+    print("Result: Statistically significant (p < 0.05)")
+else:
+    print("Result: NOT statistically significant (p >= 0.05)")
+
+    
+# ===============================
+# RUN FOR BASELINE
+# ===============================
+f1_base_mc, prec_base_mc, rec_base_mc, acc_base_mc = \
+    monte_carlo_full_metrics(baseline_model, X_test_scaled, y_test)
 
 # ===============================
-# PRINT MONTE CARLO RESULTS
+# RUN FOR CARS-M
 # ===============================
-print("\n===== MONTE CARLO RESULTS =====")
-
-print("\nBASELINE F1 Mean:", np.mean(f1_base_mc))
-print("BASELINE 95% CI:", ci_95(f1_base_mc))
-
-print("\nCARS-M F1 Mean:", np.mean(f1_carsm_mc))
-print("CARS-M 95% CI:", ci_95(f1_carsm_mc))
+f1_carsm_mc, prec_carsm_mc, rec_carsm_mc, acc_carsm_mc = \
+    monte_carlo_full_metrics(carsm_model, X_test_scaled, y_test, threshold=best_t)
 
 # ===============================
-# VISUALIZATION 1: F1 DISTRIBUTION
+# ADDITIONAL STATISTICAL TESTS
 # ===============================
-plt.figure(figsize=(8,5))
-plt.hist(f1_base_mc, bins=15, alpha=0.6, label="Baseline")
-plt.hist(f1_carsm_mc, bins=15, alpha=0.6, label="CARS-M")
-plt.axvline(np.mean(f1_base_mc), linestyle='--')
-plt.axvline(np.mean(f1_carsm_mc), linestyle='--')
-plt.title("Monte Carlo F1 Distribution")
-plt.xlabel("F1 Score")
-plt.ylabel("Frequency")
-plt.legend()
-plt.show()
 
-# ===============================
-# VISUALIZATION 2: ROC CURVE
-# ===============================
-baseline_probs = baseline_model.predict_proba(X_test_scaled)[:,1]
-carsm_probs = carsm_model.predict_proba(X_test_scaled)[:,1]
+from scipy.stats import ttest_rel
 
-fpr_base, tpr_base, _ = roc_curve(y_test, baseline_probs)
-fpr_carsm, tpr_carsm, _ = roc_curve(y_test, carsm_probs)
+def paired_test(metric_base, metric_carsm, metric_name):
+    diff = metric_carsm - metric_base
+    t_stat, p_value = ttest_rel(metric_carsm, metric_base)
 
-auc_base = auc(fpr_base, tpr_base)
-auc_carsm = auc(fpr_carsm, tpr_carsm)
+    mean_diff = np.mean(diff)
+    std_diff = np.std(diff, ddof=1)
+    cohens_d = mean_diff / std_diff
 
-plt.figure(figsize=(6,6))
-plt.plot(fpr_base, tpr_base, label=f"Baseline (AUC={auc_base:.3f})")
-plt.plot(fpr_carsm, tpr_carsm, label=f"CARS-M (AUC={auc_carsm:.3f})")
-plt.plot([0,1],[0,1],'--')
+    print(f"\n--- {metric_name} ---")
+    print(f"Mean Difference (CARS-M - Baseline): {mean_diff:.6f}")
+    print(f"T-statistic: {t_stat:.4f}")
+    print(f"P-value: {p_value:.6f}")
+    print(f"Cohen's d: {cohens_d:.4f}")
+
+    if p_value < 0.05:
+        print("Result: Statistically significant (p < 0.05)")
+    else:
+        print("Result: NOT statistically significant (p >= 0.05)")
+
+
+print("\n==============================")
+print(" ADDITIONAL METRIC SIGNIFICANCE TESTS ")
+print("==============================")
+
+paired_test(rec_base_mc, rec_carsm_mc, "Recall")
+paired_test(prec_base_mc, prec_carsm_mc, "Precision")
+paired_test(acc_base_mc, acc_carsm_mc, "Accuracy")
+
+from sklearn.metrics import roc_curve, auc
+
+fpr_base, tpr_base, _ = roc_curve(y_test, baseline_model.predict_proba(X_test_scaled)[:,1])
+fpr_carsm, tpr_carsm, _ = roc_curve(y_test, carsm_model.predict_proba(X_test_scaled)[:,1])
+
+plt.figure(figsize=(8,6))
+plt.plot(fpr_base, tpr_base, label=f'Baseline (AUC={auc(fpr_base,tpr_base):.3f})', color='blue')
+plt.plot(fpr_carsm, tpr_carsm, label=f'CARS-M (AUC={auc(fpr_carsm,tpr_carsm):.3f})', color='orange')
+plt.plot([0,1],[0,1],'k--', alpha=0.5)
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
 plt.title("ROC Curve Comparison")
 plt.legend()
+plt.grid(True)
 plt.show()

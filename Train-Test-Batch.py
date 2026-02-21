@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 # ===============================
 BASE_RISK_THRESHOLD = 0.45
 NUM_SIMULATIONS = 10
-RANDOM_STATE = 42
+RANDOM_STATE = 39
 SCALE_POS_WEIGHT = 4
 
 # Priority settings

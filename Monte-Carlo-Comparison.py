@@ -1,6 +1,4 @@
-# ===============================
-# CLEAN COMPARISON: CARS-M vs BASELINE
-# ===============================
+#final
 
 import pandas as pd
 import numpy as np
@@ -9,7 +7,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
-RANDOM_STATE = 42
+RANDOM_STATE = 39
 
 # ===============================
 # LOAD DATA
@@ -35,7 +33,7 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
 # ===============================
-# 1️⃣ BASELINE MODEL
+# BASELINE MODEL
 # ===============================
 baseline_model = XGBClassifier(
     n_estimators=200,
@@ -56,10 +54,9 @@ accuracy_base = accuracy_score(y_test, baseline_preds)
 f1_base = f1_score(y_test, baseline_preds)
 
 # ===============================
-# IMPROVED CARS-M MODEL
+# CARS-M MODEL
 # ===============================
 
-# Compute imbalance ratio
 scale_pos_weight = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
 
 carsm_model = XGBClassifier(
@@ -74,15 +71,14 @@ carsm_model = XGBClassifier(
 
 carsm_model.fit(X_train_scaled, y_train)
 
-# Predict probabilities
 carsm_probs = carsm_model.predict_proba(X_test_scaled)[:,1]
 
 # ===============================
 # MONTE CARLO THRESHOLD TUNING
 # ===============================
 
-NUM_SIMULATIONS = 50
-NOISE_STD = 0.02
+NUM_SIMULATIONS = 100
+NOISE_STD = 0.015
 
 mc_probs = []
 
@@ -116,8 +112,6 @@ precision_carsm = precision_score(y_test, carsm_preds)
 recall_carsm = recall_score(y_test, carsm_preds)
 accuracy_carsm = accuracy_score(y_test, carsm_preds)
 f1_carsm = f1_score(y_test, carsm_preds)
-
-
 
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
@@ -246,7 +240,6 @@ print(f"Accuracy Mean:  {np.mean(acc_carsm_mc):.4f} | 95% CI: {ci_95(acc_carsm_m
 
 import matplotlib.pyplot as plt
 
-# Define a plotting function for Monte Carlo metrics
 def plot_mc_metrics(f1_base, f1_carsm, prec_base, prec_carsm, rec_base, rec_carsm, acc_base, acc_carsm):
     plt.figure(figsize=(16, 10))
 
@@ -285,7 +278,6 @@ def plot_mc_metrics(f1_base, f1_carsm, prec_base, prec_carsm, rec_base, rec_cars
     plt.tight_layout()
     plt.show()
 
-# Call the plotting function for Monte Carlo metrics
 plot_mc_metrics(f1_base_mc, f1_carsm_mc, 
                 prec_base_mc, prec_carsm_mc, 
                 rec_base_mc, rec_carsm_mc, 
