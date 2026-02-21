@@ -32,25 +32,8 @@ pip install -r requirements.txt
 
 CARS-M works with the following datasets:
 
-* `predictive_maintenance.csv` – Real-world hybrid cloud-edge dataset (AI41, [Kaggle](https://www.kaggle.com/datasets))
-* `FD001` & `FD003` – NASA Turbofan Engine Degradation Simulation datasets
-
-Example usage:
-
-```python
-from carsm_final import run_carsm
-
-# Load your dataset
-X, y = load_dataset("predictive_maintenance.csv")
-
-# Train/test split, scaling, and model fitting
-results = run_carsm(X, y)
-
-# Display metrics
-print(results)
-```
-
-> For NASA datasets, similar preprocessing can be applied, with the same `run_carsm` function for evaluation.
+* `predictive_maintenance.csv` – Real-world hybrid cloud-edge dataset (AI41, [Kaggle](https://www.kaggle.com/datasets/stephanmatzka/predictive-maintenance-dataset-ai4i-2020))
+* `FD001` & `FD003` – NASA Turbofan Engine Degradation Simulation datasets ([CMAPSS Jet Engine Simulated Data](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data)
 
 ## Repository Structure
 
