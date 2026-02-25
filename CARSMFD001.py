@@ -1,6 +1,3 @@
-# ===============================
-# CARS-M for FD001
-# ===============================
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -8,9 +5,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from xgboost import XGBClassifier
 
-RANDOM_STATE = 39
+RANDOM_STATE = 51
 NUM_SIMULATIONS = 100
 NOISE_STD = 0.02
+ALPHA=0.7;
 
 # ===============================
 # LOAD DATA (FD001)
@@ -83,18 +81,36 @@ carsm_model = XGBClassifier(
 carsm_model.fit(X_train_scaled, y_train)
 
 # ===============================
-# MONTE CARLO THRESHOLD TUNING
+# MONTE CARLO 
 # ===============================
 mc_probs = []
+unit_clusters = X_test.index // 10  
+
 for _ in range(NUM_SIMULATIONS):
     noise = np.random.normal(0, NOISE_STD, X_test_scaled.shape)
     X_noisy = X_test_scaled + noise
-    probs = carsm_model.predict_proba(X_noisy)[:,1]
-    mc_probs.append(probs)
+    probs = carsm_model.predict_proba(X_noisy)[:, 1]
+    
+    df_decision = pd.DataFrame({
+        'prob': probs,
+        'cluster': unit_clusters
+    })
+    
+    # Cluster risk
+    cluster_risk = df_decision.groupby('cluster')['prob'].mean()
+    df_decision['cluster_failure_rate'] = df_decision['cluster'].map(cluster_risk)
+    
+    # Priority score
+    df_decision['priority_score'] = ALPHA*df_decision['prob'] + (1-ALPHA)*df_decision['cluster_failure_rate']
+    
+    mc_probs.append(df_decision['priority_score'].values)
 
 mc_probs = np.array(mc_probs)
 mean_probs = mc_probs.mean(axis=0)
 
+# ===============================
+# THRESHOLD TUNING
+# ===============================
 thresholds = np.arange(0.05, 0.9, 0.01)
 best_f1 = 0
 best_t = 0.1
@@ -165,7 +181,7 @@ ax.bar(x - width/2, baseline_means, width, label='Baseline', color='blue')
 ax.bar(x + width/2, carsm_means, width, label='CARS-M', color='orange')
 
 ax.set_ylabel('Score')
-ax.set_title('Monte Carlo Metrics Comparison')
+ax.set_title('Monte Carlo Metrics Comparison for FD001')
 ax.set_xticks(x)
 ax.set_xticklabels(metrics)
 

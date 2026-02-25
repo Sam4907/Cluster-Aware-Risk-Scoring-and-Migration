@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 import seaborn as sns
@@ -9,11 +9,9 @@ import matplotlib.pyplot as plt
 
 RANDOM_STATE = 51
 cluster_col = "Type"
-
-# New parameters
-ALPHA = 0.7
+ALPHA = 0.7                 # weight for individual risk
 TOP_MIGRATION_PERCENT = 0.05
-CAPACITY_LIMIT = 1.2
+CAPACITY_LIMIT = 1.2       
 
 # ===============================
 # 1. LOAD DATA
@@ -33,10 +31,8 @@ y = df["Machine failure"].values
 # 2. TRAIN / TEST SPLIT
 # ===============================
 X_train, X_test, y_train, y_test, cluster_train, cluster_test = train_test_split(
-    X, y, cluster_series,
-    test_size=0.2,
-    random_state=RANDOM_STATE,
-    stratify=y
+    X, y, cluster_series, test_size=0.2,
+    random_state=RANDOM_STATE, stratify=y
 )
 
 cluster_train = cluster_train.str.strip()
@@ -47,29 +43,11 @@ X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled  = scaler.transform(X_test)
 
 # ===============================
-# 3. BASELINE MODEL
-# ===============================
-baseline_model = XGBClassifier(
-    n_estimators=500,
-    max_depth=5,
-    learning_rate=0.025,
-    random_state=RANDOM_STATE,
-    eval_metric='logloss',
-    scale_pos_weight=1,
-    n_jobs=-1
-)
-
-baseline_model.fit(X_train_scaled, y_train)
-
-baseline_probs = baseline_model.predict_proba(X_test_scaled)[:, 1]
-baseline_preds = (baseline_probs >= 0.5).astype(int)
-
-# ===============================
-# 4. ADVANCED CARS-M MODEL
+# 3. MODEL
 # ===============================
 scale_pos_weight = len(y_train[y_train == 0]) / len(y_train[y_train == 1])
 
-carsm_model = XGBClassifier(
+model = XGBClassifier(
     n_estimators=500,
     max_depth=5,
     learning_rate=0.025,
@@ -79,31 +57,35 @@ carsm_model = XGBClassifier(
     n_jobs=-1
 )
 
-carsm_model.fit(X_train_scaled, y_train)
+model.fit(X_train_scaled, y_train)
 
-probs = carsm_model.predict_proba(X_test_scaled)[:, 1]
+# ===============================
+# 4. PREDICTIONS
+# ===============================
+probs = model.predict_proba(X_test_scaled)[:, 1]
 
 df_decision = X_test.copy()
 df_decision['prob'] = probs
 df_decision['cluster'] = cluster_test.values
 
 # ===============================
-# 5. CLUSTER-AWARE PRIORITY (Improved)
+# 5. CLUSTER-AWARE PRIORITY
 # ===============================
 cluster_risk = df_decision.groupby('cluster')['prob'].mean()
 df_decision['cluster_failure_rate'] = df_decision['cluster'].map(cluster_risk)
 
+# New tunable priority formula
 df_decision['priority_score'] = (
     ALPHA * df_decision['prob'] +
     (1 - ALPHA) * df_decision['cluster_failure_rate']
 )
 
 # ===============================
-# 6. THRESHOLD TUNING (Fixed Properly)
+# 6. THRESHOLD TUNING
 # ===============================
 thresholds = np.arange(0.05, 0.9, 0.01)
 best_f1 = 0
-best_t = 0.5
+best_t = 0.7
 
 for t in thresholds:
     preds = (df_decision['priority_score'] >= t).astype(int)
@@ -113,11 +95,14 @@ for t in thresholds:
         best_f1 = f1
         best_t = t
 
-carsm_preds = (df_decision['priority_score'] >= best_t).astype(int)
+df_decision['predicted_failure'] = (
+    df_decision['priority_score'] >= best_t
+).astype(int)
 
 # ===============================
 # 7. CROSS-CLUSTER MIGRATION
 # ===============================
+
 cluster_median = cluster_risk.median()
 high_risk_clusters = cluster_risk[cluster_risk > cluster_median].index
 low_risk_clusters  = cluster_risk[cluster_risk <= cluster_median].index
@@ -126,7 +111,6 @@ df_decision['rank_in_cluster'] = df_decision.groupby('cluster')['priority_score'
                                             .rank(ascending=False, method='first')
 
 df_decision['migrate'] = False
-
 for cl in high_risk_clusters:
     cluster_mask = df_decision['cluster'] == cl
     cluster_size = cluster_mask.sum()
@@ -136,20 +120,24 @@ for cl in high_risk_clusters:
           .head(top_k).index
     df_decision.loc[idx, 'migrate'] = True
 
-# Capacity-aware migration simulation
+# ===============================
+# 8. CAPACITY-AWARE MIGRATION PLAN
+# ===============================
+migration_plan = []
+
 targets = df_decision[
     (df_decision['cluster'].isin(low_risk_clusters)) &
     (~df_decision['migrate'])
 ].copy()
 
-targets['current_load'] = 1.0
-
-migration_plan = []
+targets['current_load'] = 1.0  
 
 for src_idx, src in df_decision[df_decision['migrate']].iterrows():
+
     total_target_priority = targets['priority_score'].sum() + 1e-6
 
     for tgt_idx, tgt in targets.iterrows():
+
         fraction = tgt['priority_score'] / total_target_priority
         projected_load = targets.loc[tgt_idx, 'current_load'] + fraction
 
@@ -157,7 +145,7 @@ for src_idx, src in df_decision[df_decision['migrate']].iterrows():
             migration_plan.append({
                 'source_machine': src_idx,
                 'target_machine': tgt_idx,
-                'fraction': fraction,
+                'fraction_of_load': fraction,
                 'target_cluster': tgt['cluster']
             })
             targets.loc[tgt_idx, 'current_load'] = projected_load
@@ -165,45 +153,37 @@ for src_idx, src in df_decision[df_decision['migrate']].iterrows():
 migration_plan = pd.DataFrame(migration_plan)
 
 # ===============================
-# 8. METRICS COMPARISON
+# 9. FINAL METRICS
 # ===============================
-precision_baseline = precision_score(y_test, baseline_preds)
-recall_baseline    = recall_score(y_test, baseline_preds)
-accuracy_baseline  = accuracy_score(y_test, baseline_preds)
-f1_baseline        = f1_score(y_test, baseline_preds)
-
-precision_carsm = precision_score(y_test, carsm_preds)
-recall_carsm    = recall_score(y_test, carsm_preds)
-accuracy_carsm  = accuracy_score(y_test, carsm_preds)
-f1_carsm        = f1_score(y_test, carsm_preds)
+precision_carsm = precision_score(y_test, df_decision['predicted_failure'])
+recall_carsm    = recall_score(y_test, df_decision['predicted_failure'])
+accuracy_carsm  = accuracy_score(y_test, df_decision['predicted_failure'])
+f1_carsm        = f1_score(y_test, df_decision['predicted_failure'])
 
 print("\n==============================")
-print("MODEL COMPARISON (Advanced CARS-M)")
+print("CARS-M FINAL METRICS (Improved Version)")
 print("==============================")
-print(f"Baseline Precision: {precision_baseline:.4f}")
-print(f"Baseline Recall:    {recall_baseline:.4f}")
-print(f"Baseline Accuracy:  {accuracy_baseline:.4f}")
-print(f"Baseline F1 Score:  {f1_baseline:.4f}")
-print()
-print(f"CARS-M Precision:   {precision_carsm:.4f}")
-print(f"CARS-M Recall:      {recall_carsm:.4f}")
-print(f"CARS-M Accuracy:    {accuracy_carsm:.4f}")
-print(f"CARS-M F1 Score:    {f1_carsm:.4f}")
-print(f"Best Threshold Used: {best_t:.2f}")
-print(f"Machines Migrated: {df_decision['migrate'].sum()}")
+print(f"Best Threshold: {best_t:.2f}")
+print(f"Precision: {precision_carsm:.4f}")
+print(f"Recall:    {recall_carsm:.4f}")
+print(f"Accuracy:  {accuracy_carsm:.4f}")
+print(f"F1 Score:  {f1_carsm:.4f}")
+print(f"Machines flagged for migration: {df_decision['migrate'].sum()}")
 
 # ===============================
-# 9. VISUALIZATION
+# 10. CONFUSION MATRIX
 # ===============================
-metrics = ['precision', 'recall', 'f1', 'accuracy']
-results_df = pd.DataFrame({
-    'Baseline': [precision_baseline, recall_baseline, f1_baseline, accuracy_baseline],
-    'CARS-M': [precision_carsm, recall_carsm, f1_carsm, accuracy_carsm]
-}, index=metrics)
+cm = confusion_matrix(y_test, df_decision['predicted_failure'])
+cm_df = pd.DataFrame(cm,
+                     index=['Actual OK', 'Actual Failure'],
+                     columns=['Predicted OK', 'Predicted Failure'])
 
-results_df.plot(kind='bar', figsize=(10,6), color=['blue', 'orange'])
-plt.title('Baseline vs Advanced CARS-M Comparison')
-plt.ylabel('Score')
-plt.xticks(rotation=45)
-plt.ylim(0, 1)
+plt.figure(figsize=(6,5))
+sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues')
+plt.title("Improved CARS-M Confusion Matrix")
+plt.ylabel("Actual")
+plt.xlabel("Predicted")
 plt.show()
+
+print("\nSample migration plan:")
+print(migration_plan.head())

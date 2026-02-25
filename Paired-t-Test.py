@@ -114,7 +114,6 @@ accuracy_carsm = accuracy_score(y_test, carsm_preds)
 f1_carsm = f1_score(y_test, carsm_preds)
 
 
-
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, auc
 
